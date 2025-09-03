@@ -508,21 +508,37 @@ def run_trading_script(order_file: Path) -> dict:
         return {"status":"error","error":str(e)}
 
 def run_generate_graph() -> Path | None:
-    # Same import-or-CLI pattern
     gp = REPO_ROOT / "generate_graph.py"
-    if not gp.exists(): return None
+    if not gp.exists():
+        return None
     try:
-        out = subprocess.run([sys.executable, str(gp)], cwd=str(REPO_ROOT),
-                             capture_output=True, text=True, timeout=600)
-        # If your script prints where it saved, parse it; else, guess folder
-        plots_dir = REPO_ROOT / "Graphs"
-        if plots_dir.exists():
-            # choose the newest file
-            imgs = list(plots_dir.glob("*.*"))
-            return max(imgs, key=lambda p: p.stat().st_mtime) if imgs else None
+        out = subprocess.run(
+            [sys.executable, str(gp), "--file", str(REPO_ROOT/"chatgpt_portfolio_update.csv"), "--no-show"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=600
+        )
+        # prefer explicit "SAVED:" lines if your script prints them
+        saved = None
+        for line in out.stdout.splitlines():
+            if line.startswith("SAVED:"):
+                saved = Path(line.split("SAVED:",1)[1].strip())
+                break
+        # fallback: newest image in Graphs/
+        if not saved:
+            plots_dir = REPO_ROOT / "Graphs"
+            imgs = list(plots_dir.glob("*.png")) if plots_dir.exists() else []
+            saved = max(imgs, key=lambda p: p.stat().st_mtime) if imgs else None
+        if saved and saved.exists():
+            # write a stable alias at repo root
+            stable = REPO_ROOT / "Results.png"
+            try:
+                shutil.copyfile(saved, stable)
+            except Exception:
+                stable = saved  # fall back to original if copy fails
+            return stable
         return None
     except Exception:
         return None
+
 
 def main():
     # 1) Build the LLM context and prompt
