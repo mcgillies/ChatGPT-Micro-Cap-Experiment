@@ -1,0 +1,43 @@
+name: Daily Snapshot (Paper)
+
+on:
+  workflow_dispatch: {}   # run manually first
+  # schedule:
+  #   - cron: "5 13 * * 1-5"   # weekdays 13:05 UTC ~ 07:05 America/Edmonton
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # environment: prod   # uncomment if you created an Environment
+    permissions:
+      contents: write     # to commit report files
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt || true
+          pip install openai pandas tabulate requests python-dotenv
+
+      - name: Run daily email (paper)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          GMAIL_SMTP: ${{ secrets.GMAIL_SMTP }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+        run: |
+          python daily_email.py
+
+      - name: Commit report artifact
+        run: |
+          git config user.name "gh-bot"
+          git config user.email "actions@github.com"
+          git add reports || true
+          git commit -m "Daily snapshot [skip ci]" || true
+          git push
