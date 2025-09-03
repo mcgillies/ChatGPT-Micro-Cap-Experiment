@@ -305,7 +305,6 @@ def render_md(proposed, executed, plot_path, llm_notes, csv_path: Path):
     now = dt.datetime.now()
     buys, sells, holds = summarize_proposals(proposed)
 
-    # parse applied actions from trading_script stdout
     exec_obj = {}
     if isinstance(executed, dict):
         exec_obj = parse_execution_stdout(executed.get("stdout","") or "")
@@ -315,6 +314,14 @@ def render_md(proposed, executed, plot_path, llm_notes, csv_path: Path):
     cash, equity = read_latest_cash_equity(csv_path)
 
     lines = []
+    # --- New: last updated + stable image ---
+    lines.append(f"**Last Updated:** {pretty_date(now)}\n")
+    if plot_path:
+        # Use a short relative path for email/github rendering
+        rel = "Results.png" if Path(plot_path).name == "Results.png" else str(Path(plot_path).as_posix())
+        lines.append(f"![Latest Performance Results]({rel})\n")
+
+    # existing title + snapshot + sections
     lines.append(f"# Daily Portfolio Decisions — {now:%Y-%m-%d}")
     if equity is not None or cash is not None:
         lines.append("")
@@ -346,13 +353,6 @@ def render_md(proposed, executed, plot_path, llm_notes, csv_path: Path):
     if llm_notes:
         lines.append("\n## Notes")
         lines.append(llm_notes)
-
-    if plot_path:
-        # embed image (works in GitHub/email clients that support markdown images)
-        lines.append("\n## Performance")
-        # both embed and path (some clients ignore images)
-        lines.append(f"![Performance Chart]({plot_path})")
-        lines.append(f"\n_Plot saved:_ `{plot_path}`")
 
     # Always include the raw JSON at the end (for audit/debug), but collapsed under a heading
     lines.append("\n---\n### Debug / Raw\n**Proposed JSON**")
@@ -580,7 +580,9 @@ def main():
     # 6) Make a report + email
     notes = proposed.get("notes","")
     csv_path = REPO_ROOT / "chatgpt_portfolio_update.csv"
+    plot_path = run_generate_graph()
     md = render_md(proposed, executed, str(plot_path) if plot_path else None, notes, csv_path)
+
     report_path = REPORTS / f"paper_run_{dt.datetime.now():%Y_%m_%d}.md"
     report_path.write_text(md, encoding="utf-8")
 
