@@ -16,7 +16,7 @@ import shutil
 import datetime as dt
 
 from openai import OpenAI
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ---------- Config you can tweak ----------
