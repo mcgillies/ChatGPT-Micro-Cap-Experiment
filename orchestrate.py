@@ -11,6 +11,10 @@ import pandas as pd
 from dotenv import load_dotenv
 load_dotenv()
 
+from pathlib import Path
+import shutil
+import datetime as dt
+
 from openai import OpenAI
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -36,6 +40,16 @@ MAX_TURNOVER = 0.5            # don't trade more than 50% of portfolio in one pa
 
 
 # ---------- Helpers ----------
+
+def _ordinal(n: int) -> str:
+    # 1 -> 1st, 2 -> 2nd, 3 -> 3rd, 4 -> 4th, etc.
+    return f"{n}{'th' if 11<=n%100<=13 else {1:'st',2:'nd',3:'rd'}.get(n%10,'th')}"
+
+def pretty_date(d: dt.datetime | dt.date) -> str:
+    if isinstance(d, dt.datetime):
+        d = d.date()
+    return f"{d.strftime('%B')} {_ordinal(d.day)}, {d.year}"
+
 def build_user_prompt(positions_df: pd.DataFrame | None, cash: float | None, equity: float | None,
                       last_thesis: str = "") -> str:
     # compact holdings table (25 rows max)
