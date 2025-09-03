@@ -847,8 +847,7 @@ If this is a mistake, enter 1. """
 # ------------------------------
 # Reporting / Metrics
 # ------------------------------
-
-def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
+def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float, prompt_starting_equity: bool = True) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
     portfolio_dict: list[dict[Any, Any]] = chatgpt_portfolio.to_dict(orient="records")
     today = check_weekend()
@@ -1012,14 +1011,16 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     )
     spx_norm = spx_norm_fetch.df
     spx_value = np.nan
-    starting_equity = np.nan  # Ensure starting_equity is always defined
+    starting_equity = np.nan
     if not spx_norm.empty:
         initial_price = float(spx_norm["Close"].iloc[0])
         price_now = float(spx_norm["Close"].iloc[-1])
-        try:
-            starting_equity = float(input("what was your starting equity? "))
-        except Exception:
-            print("Invalid input for starting equity. Defaulting to NaN.")
+        if prompt_starting_equity:
+            try:
+                starting_equity = float(input("what was your starting equity? "))
+            except Exception:
+                print("Invalid input for starting equity. Defaulting to NaN.")
+        # if not prompting, leave NaN and skip printing the comparison
         spx_value = (starting_equity / initial_price) * price_now if not np.isnan(starting_equity) else np.nan
 
     # -------- Pretty Printing --------
@@ -1084,6 +1085,159 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         "*Paste everything above into ChatGPT*"
     )
 
+# ---------- Paper execution helpers ----------
+
+def _get_day_price(ticker: str) -> dict:
+    """Fetch last trading day's OHLC quickly; return {'open':..., 'close':..., 'high':..., 'low':...} or NaNs."""
+    s, e = trading_day_window()
+    fetch = download_price_data(ticker, start=s, end=e, auto_adjust=False, progress=False)
+    df = fetch.df
+    if df.empty:
+        return {"open": np.nan, "close": np.nan, "high": np.nan, "low": np.nan}
+    o = float(df["Open"].iloc[-1]) if "Open" in df else float(df["Close"].iloc[-1])
+    c = float(df["Close"].iloc[-1])
+    h = float(df["High"].iloc[-1])
+    l = float(df["Low"].iloc[-1])
+    return {"open": o if not np.isnan(o) else c, "close": c, "high": h, "low": l}
+
+def _mark_to_market_value(portfolio_df: pd.DataFrame) -> float:
+    """Compute current market value of the portfolio using Close (or Open fallback)."""
+    if portfolio_df is None or portfolio_df.empty:
+        return 0.0
+    total = 0.0
+    for _, row in portfolio_df.iterrows():
+        tkr = str(row["ticker"]).upper()
+        sh = float(row["shares"]) if not pd.isna(row["shares"]) else 0.0
+        if sh <= 0:
+            continue
+        px = _get_day_price(tkr)["close"]
+        if np.isnan(px):
+            continue
+        total += sh * px
+    return float(round(total, 2))
+
+def apply_actions_paper(
+    proposed: dict,
+    portfolio_df: pd.DataFrame,
+    cash: float,
+    max_weight_per_name: float = 0.20,
+) -> tuple[pd.DataFrame, float, list[dict]]:
+    """
+    Apply LLM proposed actions in *paper* mode.
+
+    Input JSON schema (what your orchestrator produced):
+    {
+      "actions": [
+        {"ticker":"XYZ","side":"buy","weight":0.05,"rationale":"...", "horizon_days":10, "confidence":0.7},
+        {"ticker":"ABC","side":"sell","weight":0.03,"rationale":"..."}
+      ],
+      "notes": "..."
+    }
+
+    Behavior:
+    - Interprets 'weight' as fraction of total equity (cash + M2M holdings).
+    - Buys/Sells are executed using today's OPEN if available else CLOSE (limit filled immediately).
+    - Uses existing log_manual_buy/log_manual_sell with interactive=False so no prompts.
+    - Clamps single-name weight to max_weight_per_name.
+    """
+    # Ensure DataFrame shape
+    if not isinstance(portfolio_df, pd.DataFrame):
+        portfolio_df = _ensure_df(portfolio_df)
+    if portfolio_df.empty:
+        portfolio_df = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
+
+    # Compute current equity to translate weights -> target notionals
+    mv = _mark_to_market_value(portfolio_df)
+    total_equity = float(mv + float(cash))
+
+    summary: list[dict] = []
+    actions = proposed.get("actions", []) if isinstance(proposed, dict) else []
+
+    for a in actions:
+        try:
+            tkr = str(a.get("ticker", "")).upper().strip()
+            side = str(a.get("side", "hold")).lower()
+            w = float(a.get("weight", 0.0))
+            # clamp weight
+            if w < 0.0: w = 0.0
+            if w > max_weight_per_name: w = max_weight_per_name
+
+            if side not in {"buy", "sell"} or w == 0.0 or not tkr:
+                summary.append({"ticker": tkr or "?", "side": side, "status": "skipped"})
+                continue
+
+            px = _get_day_price(tkr)
+            exec_px = px["open"] if not np.isnan(px["open"]) else px["close"]
+            if np.isnan(exec_px):
+                summary.append({"ticker": tkr, "side": side, "status": "no market data"})
+                continue
+
+            target_notional = w * total_equity
+            if side == "buy":
+                # shares from cash (bounded by cash)
+                if target_notional <= 0:
+                    summary.append({"ticker": tkr, "side": "buy", "status": "zero target"})
+                    continue
+                shares = float(int(target_notional // max(exec_px, 1e-9)))
+                if shares <= 0:
+                    summary.append({"ticker": tkr, "side": "buy", "status": "too small for 1 share"})
+                    continue
+                # execute immediate (limit at exec_px)
+                new_cash, new_port = log_manual_buy(
+                    buy_price=float(exec_px),
+                    shares=shares,
+                    ticker=tkr,
+                    stoploss=float(a.get("stop_loss", 0.0) or 0.0),
+                    cash=float(cash),
+                    chatgpt_portfolio=portfolio_df,
+                    interactive=False,
+                )
+                if (new_cash, new_port) == (cash, portfolio_df):
+                    summary.append({"ticker": tkr, "side": "buy", "status": "not filled"})
+                else:
+                    cash, portfolio_df = new_cash, new_port
+                    summary.append({"ticker": tkr, "side": "buy", "shares": float(shares), "price": float(exec_px), "status": "filled"})
+
+            elif side == "sell":
+                # compute how many shares correspond to this notional (cap at current position)
+                row = portfolio_df[portfolio_df["ticker"].str.upper() == tkr]
+                if row.empty:
+                    summary.append({"ticker": tkr, "side": "sell", "status": "not in portfolio"})
+                    continue
+                pos_shares = float(row["shares"].iloc[0])
+                if pos_shares <= 0:
+                    summary.append({"ticker": tkr, "side": "sell", "status": "zero shares"})
+                    continue
+                shares = float(int(target_notional // max(exec_px, 1e-9)))
+                # If target_notional is 0 or tiny, default to selling all? Keep conservative: sell min(target-implied, pos)
+                if shares <= 0:
+                    shares = min(pos_shares, float(int(pos_shares * 0.1)) or 0.0)  # default 10% trim if tiny weight
+                shares = min(shares, pos_shares)
+                if shares <= 0:
+                    summary.append({"ticker": tkr, "side": "sell", "status": "too small"})
+                    continue
+                # execute immediate (limit at exec_px)
+                new_cash, new_port = log_manual_sell(
+                    sell_price=float(exec_px),
+                    shares_sold=float(shares),
+                    ticker=tkr,
+                    cash=float(cash),
+                    chatgpt_portfolio=portfolio_df,
+                    reason="AUTO PAPER SELL",
+                    interactive=False,
+                )
+                if (new_cash, new_port) == (cash, portfolio_df):
+                    summary.append({"ticker": tkr, "side": "sell", "status": "not filled"})
+                else:
+                    cash, portfolio_df = new_cash, new_port
+                    summary.append({"ticker": tkr, "side": "sell", "shares": float(shares), "price": float(exec_px), "status": "filled"})
+
+        except Exception as e:
+            summary.append({"ticker": a.get("ticker"), "side": a.get("side"), "status": f"error: {e}"})
+
+    return portfolio_df, float(cash), summary
+
+
 
 # ------------------------------
 # Orchestration
@@ -1144,27 +1298,63 @@ def load_latest_portfolio_state(
     return latest_tickers, cash
 
 
-def main(file: str, data_dir: Path | None = None) -> None:
-    """Check versions, then run the trading script."""
+def main(file: str, data_dir: Path | None = None, order_file: str | None = None, paper: bool = False) -> dict:
+    """
+    If order_file is provided, ingest proposed actions (JSON) and apply in paper mode (no prompts).
+    Then run pricing/stoploss and write CSVs as usual.
+    Returns a compact summary dict for orchestrators.
+    """
     chatgpt_portfolio, cash = load_latest_portfolio_state(file)
-    print(file)
     if data_dir is not None:
         set_data_dir(data_dir)
 
-    chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash)
-    daily_results(chatgpt_portfolio, cash)
+    applied_summary: list[dict] = []
+    proposed: dict | None = None
+
+    if order_file:
+        try:
+            with open(order_file, "r", encoding="utf-8") as fh:
+                proposed = json.load(fh)
+        except Exception as e:
+            print(f"Failed to read order file {order_file}: {e}")
+
+        if paper and proposed:
+            chatgpt_portfolio, cash, applied_summary = apply_actions_paper(
+                proposed, _ensure_df(chatgpt_portfolio), cash
+            )
+
+    # Price, stop-loss, and write CSVs; no interactive prompts
+    chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash, interactive=False)
+    # Non-interactive daily results
+    daily_results(chatgpt_portfolio, cash, prompt_starting_equity=False)
+
+    # Build a small summary the orchestrator can capture
+    summary = {
+        "status": "ok",
+        "date": check_weekend(),
+        "applied_actions": applied_summary,
+        "cash": float(cash),
+        "portfolio_rows": len(chatgpt_portfolio) if isinstance(chatgpt_portfolio, pd.DataFrame) else 0,
+        "files": {
+            "portfolio_csv": str(PORTFOLIO_CSV),
+            "trade_log_csv": str(TRADE_LOG_CSV),
+        },
+    }
+    return summary
+
 
 
 if __name__ == "__main__":
     import argparse
 
-    # Default CSV path resolution (keep your existing logic)
     csv_path = PORTFOLIO_CSV if PORTFOLIO_CSV.exists() else (SCRIPT_DIR / "chatgpt_portfolio_update.csv")
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", default=str(csv_path), help="Path to chatgpt_portfolio_update.csv")
     parser.add_argument("--data-dir", default=None, help="Optional data directory")
     parser.add_argument("--asof", default=None, help="Treat this YYYY-MM-DD as 'today' (e.g., 2025-08-27)")
+    parser.add_argument("--order-file", default=None, help="Path to proposed_actions.json (LLM output)")
+    parser.add_argument("--paper", action="store_true", help="Run paper execution for --order-file without prompts")
     args = parser.parse_args()
 
     if args.asof:
@@ -1173,4 +1363,15 @@ if __name__ == "__main__":
     if not Path(args.file).exists():
         print("No portfolio CSV found. Create one or run main() with your file path.")
     else:
-        main(args.file, Path(args.data_dir) if args.data_dir else None)
+        res = main(
+            file=args.file,
+            data_dir=(Path(args.data_dir) if args.data_dir else None),
+            order_file=args.order_file,
+            paper=bool(args.paper),
+        )
+        # Optional: print the summary for logs
+        try:
+            print(json.dumps(res, indent=2))
+        except Exception:
+            pass
+
