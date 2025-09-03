@@ -1,28 +1,28 @@
 name: Daily Snapshot (Paper)
 
 on:
-  workflow_dispatch: {}   # run manually first
-  # schedule:
-  #   - cron: "5 13 * * 1-5"   # weekdays 13:05 UTC ~ 07:05 America/Edmonton
+  workflow_dispatch: {}   # still allow manual runs
+  schedule:
+    - cron: "5 21 * * 1-5"   # 21:05 UTC = 16:05 ET = 14:05 MT (after market close)
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    # environment: prod   # uncomment if you created an Environment
     permissions:
       contents: write     # to commit report files
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
 
       - name: Install deps
         run: |
           pip install -r requirements.txt || true
-          pip install openai pandas tabulate requests python-dotenv
+          pip install openai pandas tabulate requests python-dotenv yfinance matplotlib
 
-      - name: Run daily email (paper)
+      - name: Run orchestrate (paper)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
@@ -32,7 +32,7 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
         run: |
-          python daily_email.py
+          python orchestrate.py
 
       - name: Commit report artifact
         run: |
