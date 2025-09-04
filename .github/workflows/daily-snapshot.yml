@@ -39,5 +39,8 @@ jobs:
           git config user.name "gh-bot"
           git config user.email "actions@github.com"
           git add reports || true
+          git add Results.png
+          git add chatgpt_portfolio_update.csv
+          git add chatgpt_trade_log.csv
           git commit -m "Daily snapshot [skip ci]" || true
           git push
