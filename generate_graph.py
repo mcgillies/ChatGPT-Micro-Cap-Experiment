@@ -4,92 +4,83 @@ import datetime as dt
 
 import matplotlib.pyplot as plt
 import pandas as pd
-import yfinance as yf
-from trading_script import download_price_data  # reuse your robust accessor
-
+from trading_script import download_price_data  # reuse robust accessor
 
 
 def load_portfolio_totals(csv_path: Path) -> pd.DataFrame:
+    """Return Date and Total Equity (no normalization)."""
     df = pd.read_csv(csv_path)
     totals = df[df["Ticker"] == "TOTAL"].copy()
     if totals.empty:
         raise RuntimeError(f"No 'TOTAL' rows found in {csv_path}. Run trading_script.py at least once.")
     totals["Date"] = pd.to_datetime(totals["Date"])
     totals = totals.sort_values("Date")
-    # Normalize to $100 baseline from the first TOTAL row
-    first_equity = float(totals["Total Equity"].iloc[0])
-    totals["Equity ($100)"] = totals["Total Equity"] / first_equity * 100.0
-    return totals[["Date", "Equity ($100)"]]
+    out = totals[["Date", "Total Equity"]].rename(columns={"Total Equity": "Portfolio Equity ($)"})
+    return out
 
 
 def download_sp500(start_date: pd.Timestamp, end_date: pd.Timestamp) -> pd.DataFrame:
     """
-    Pull S&P 500 levels using the same robust accessor as trading_script:
-    - Yahoo via yfinance
-    - Stooq via pandas-datareader
-    - Stooq CSV
-    - Proxy: ^GSPC -> SPY (already handled inside download_price_data)
-    Normalize to $100 at the first available date.
+    Pull S&P 500 using resilient accessor via trading_script.download_price_data.
+    Tries ^GSPC, then SPY if needed. Returns Date and SPX Level.
     """
     fr = download_price_data("^GSPC", start=start_date, end=end_date + pd.Timedelta(days=1), progress=False)
-    df = fr.df
+    df = fr.df.copy()
     if df.empty:
-        # final fallback: try SPY directly (in case proxy path isn’t hit)
         fr = download_price_data("SPY", start=start_date, end=end_date + pd.Timedelta(days=1), progress=False)
-        df = fr.df
+        df = fr.df.copy()
 
     if df.empty:
-        raise RuntimeError("Failed to fetch S&P 500 (both ^GSPC and SPY) via resilient accessor.")
+        raise RuntimeError("Failed to fetch S&P 500 (^GSPC) or proxy (SPY).")
 
-    # Ensure datetime index and sort
-    df = df.copy()
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index, errors="coerce")
     df = df.sort_index()
 
-    # Build normalized series
     close = df["Close"].astype(float).dropna()
     if close.empty:
         raise RuntimeError("S&P data has no Close values after fetch.")
-    base = float(close.iloc[0])
-    spx_norm = (close / base) * 100.0
-    out = spx_norm.reset_index()
-    out.columns = ["Date", "SPX ($100)"]
+
+    out = close.reset_index()
+    out.columns = ["Date", "S&P 500 Level"]
     return out
 
 
-
 def make_plot(chatgpt: pd.DataFrame, spx: pd.DataFrame, out_path: Path, show: bool) -> None:
-    # Join by date for clean annotation points (not required for plotting)
-    # We’ll plot separately so different calendars don’t block.
-    plt.figure(figsize=(10, 6))
-    # Minimal styling that works headless
-    plt.plot(chatgpt["Date"], chatgpt["Equity ($100)"], label="ChatGPT ($100)", linewidth=2)
-    plt.plot(spx["Date"], spx["SPX ($100)"], label="S&P 500 ($100)", linestyle="--", linewidth=2)
+    """
+    Dual-axis plot:
+      - Left Y: Portfolio Equity ($)
+      - Right Y: S&P 500 Level
+    """
+    fig, ax1 = plt.subplots(figsize=(10, 6))
 
-    # Annotations
-    cg_last_date = chatgpt["Date"].iloc[-1]
-    cg_last_val = float(chatgpt["Equity ($100)"].iloc[-1])
-    spx_last_date = spx["Date"].iloc[-1]
-    spx_last_val = float(spx["SPX ($100)"].iloc[-1])
+    # Left axis: portfolio equity in dollars
+    l1, = ax1.plot(chatgpt["Date"], chatgpt["Portfolio Equity ($)"], linewidth=2, label="Portfolio Equity ($)")
+    ax1.set_xlabel("Date")
+    ax1.set_ylabel("Portfolio Equity ($)")
+    ax1.grid(True, which="both", alpha=0.3)
 
-    plt.text(cg_last_date, cg_last_val * 1.01, f"{cg_last_val-100:+.1f}%", fontsize=9)
-    plt.text(spx_last_date, spx_last_val * 1.01, f"{spx_last_val-100:+.1f}%", fontsize=9)
+    # Right axis: SPX level
+    ax2 = ax1.twinx()
+    l2, = ax2.plot(spx["Date"], spx["S&P 500 Level"], linestyle="--", linewidth=2, label="S&P 500 Level")
+    ax2.set_ylabel("S&P 500 Level")
 
-    plt.title("ChatGPT Micro-Cap vs S&P 500 (Normalized to $100)")
-    plt.xlabel("Date")
-    plt.ylabel("Value of $100")
-    plt.xticks(rotation=15)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+    # Title & legend
+    plt.title("Portfolio vs. S&P 500 (Absolute, Not Normalized)")
+    # Build a combined legend
+    lines = [l1, l2]
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc="upper left")
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150)
     if show:
         plt.show()
-    plt.close()
-    print(f"SAVED:{out_path}")  # <-- helpful for orchestrator logs
+    plt.close(fig)
+    print(f"SAVED:{out_path}")  # picked up by orchestrator
 
 
 def main():
@@ -102,7 +93,6 @@ def main():
 
     csv_path = Path(args.file)
     if not csv_path.exists():
-        # fallback to old location
         alt = Path("Scripts and CSV Files") / "chatgpt_portfolio_update.csv"
         if alt.exists():
             csv_path = alt
@@ -115,10 +105,11 @@ def main():
     spx = download_sp500(start_date, end_date)
 
     stamp = dt.datetime.now().strftime("%Y_%m_%d")
-    out_path = Path(args.outdir) / f"chatgpt_vs_spx_{stamp}.png"
+    out_path = Path(args.outdir) / f"portfolio_vs_spx_{stamp}.png"
     make_plot(chatgpt, spx, out_path, show=not args.no_show)
 
 
 if __name__ == "__main__":
     print("generating graph...")
     main()
+
