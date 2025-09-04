@@ -77,7 +77,7 @@ Last Analyst Thesis (optional):
 
 Instructions:
 Propose actionable **buy/sell/hold** updates for next session within rules. 
-Bias to liquid micro-caps; respect stops and budget. 
+Respect stops and budget. 
 Return ONLY the JSON per schema; no prose.
 """
 
@@ -95,19 +95,19 @@ def _last_close(tkr: str) -> float | None:
     
 
 def build_system_prompt(max_names: int, max_w: float, cash: float | None) -> str:
-    max_price = int(max(1, min(50, (cash or 100))))  # if cash small, keep picks cheap; cap at $50
+    # max_price = int(max(1, min(50, (cash or 100))))  # if cash small, keep picks cheap; cap at $50
     return f"""
 You are a professional-grade, *conservative* portfolio analyst whose only goal is alpha **within strict rules**.
 
 Follow these exactly:f
 - **Budget discipline:** Use only available cash. Track cash implicitly via target *trade* weights (fraction of total equity). No new capital.
 - **Execution limits:** Full shares only (engine enforces). No options, shorting, leverage, derivatives. Long-only.
-- **Universe bias:** Prefer easily tradable U.S. micro-caps (<$300M). Existing positions may exceed $300M; you may only sell/hold those.
 - **Liquidity:** Favor liquid names; avoid tickers unlikely to fill at open. Beware very low ADV/spreads.
 - **Risk control:** Respect provided stop-losses; propose new stops only if defensible.
 - **Cadence:** Daily EOD updates. Deep research Fri/Sat only (if needed, say so in `notes`).
 - **Ticker validity:** Use ONLY real US-listed symbols (NYSE/NASDAQ/AMEX). Never invent placeholders (e.g., MCC/XYZ/ABC). If unsure, omit.
-- **Affordability:** Prefer tickers priced **≤ ${max_price}** so at least 1 share is realistically buyable with current cash.
+- **Diversity:** Avoid sector concentration; max ~30% in any one area.
+- **Use ETFs** preferentially for broad exposure (e.g., SPY, QQQ, VTI, IWM, XLF, XLK, XLY, XLI).
 
 Output **ONLY valid JSON** matching this exact schema (no markdown, no backticks):
 {{
@@ -123,7 +123,7 @@ Output **ONLY valid JSON** matching this exact schema (no markdown, no backticks
       "rationale": "≤30 words"
     }}
   ],
-  "notes": "≤50 words on session-level risks or gaps"
+  "notes": "A brief description of the company and why you like/dislike it."
 }}
 
 Hard constraints for `actions`:
