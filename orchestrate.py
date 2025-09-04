@@ -586,7 +586,7 @@ def main():
     report_path = REPORTS / f"paper_run_{dt.datetime.now():%Y_%m_%d}.md"
     report_path.write_text(md, encoding="utf-8")
 
-    send_email(md, subject="Micro-Cap — Paper Run (Auto)")
+    send_email(md, subject="AI Daily Portfolio Update")
 
     print(f"Done. Wrote:\n - {order_file}\n - {report_path}")
     if plot_path: print(f" - Plot: {plot_path}")
