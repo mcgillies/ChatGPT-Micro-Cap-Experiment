@@ -107,7 +107,10 @@ Follow these exactly:f
 - **Cadence:** Daily EOD updates. Deep research Fri/Sat only (if needed, say so in `notes`).
 - **Ticker validity:** Use ONLY real US-listed symbols (NYSE/NASDAQ/AMEX). Never invent placeholders (e.g., MCC/XYZ/ABC). If unsure, omit.
 - **Diversity:** Avoid sector concentration; max ~30% in any one area.
-- **Use ETFs** preferentially for broad exposure (e.g., SPY, QQQ, VTI, IWM, XLF, XLK, XLY, XLI).
+- **Use ETFs** SOMETIMES (~50%) for broad exposure (e.g., SPY, QQQ, VTI, IWM, XLF, XLK, XLY, XLI).
+- **Diversity of market caps**: Mix large, mid, small, micro caps.
+- **Use all funds**: If cash available, propose buys; if none, say so in `notes`.
+- **Use the entire universe**: Consider all tickers in `universe` list; ignore any not listed there.
 
 Output **ONLY valid JSON** matching this exact schema (no markdown, no backticks):
 {{
