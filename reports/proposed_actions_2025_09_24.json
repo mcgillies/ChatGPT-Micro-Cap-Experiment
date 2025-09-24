@@ -1,0 +1,31 @@
+{
+  "universe": [
+    "VTI",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "XLF",
+    "XLK",
+    "XLY",
+    "XLI"
+  ],
+  "actions": [
+    {
+      "ticker": "SPY",
+      "side": "buy",
+      "weight": 0.2,
+      "rationale": "SPY offers broad market exposure and is liquid, complementing VTI.",
+      "horizon_days": 5,
+      "confidence": 0.8
+    },
+    {
+      "ticker": "XLF",
+      "side": "buy",
+      "weight": 0.2,
+      "rationale": "XLF provides exposure to financials, diversifying sector risk.",
+      "horizon_days": 5,
+      "confidence": 0.7
+    }
+  ],
+  "notes": "Consider market volatility; ensure liquidity for proposed buys."
+}
